@@ -20,6 +20,13 @@
     </script>
     <script src="https://cdn.jsdelivr.net/npm/emailjs-com@3/dist/email.min.js">
     </script>
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js">
+    </script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js">
+    </script>
+
     <style>
         /* ============================================================
            ROOT — COSMIC AURORA THEME
@@ -2059,7 +2066,25 @@
 
     <script>
         // ================================================================
-        //  DATA LAYER
+        //  FIREBASE CONFIG – YOUR ACTUAL CONFIG
+        // ================================================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyAZ7wyQhcaWoZa1ify5xqUKk12YodLTxU8",
+            authDomain: "neoncheque.firebaseapp.com",
+            projectId: "neoncheque",
+            storageBucket: "neoncheque.firebasestorage.app",
+            messagingSenderId: "963160183498",
+            appId: "1:963160183498:web:32c9dd34e5e7c3c6251a33",
+            measurementId: "G-M01DEJQBP1"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+        const DATA_DOC_ID = 'mainData';
+
+        // ================================================================
+        //  DATA LAYER – Firestore
         // ================================================================
         let cheques = [];
         let nextId = 1;
@@ -2343,13 +2368,15 @@
         }
 
         // ================================================================
-        //  DATA FUNCTIONS
+        //  DATA FUNCTIONS – Firestore
         // ================================================================
-        function loadData() {
-            const stored = localStorage.getItem('neonEnterpriseData');
-            if (stored) {
-                try {
-                    const data = JSON.parse(stored);
+        async function loadData() {
+            try {
+                const docRef = db.collection('chequesData').doc(DATA_DOC_ID);
+                const doc = await docRef.get();
+
+                if (doc.exists) {
+                    const data = doc.data();
                     cheques = data.cheques || [];
                     nextId = data.nextId || 1;
                     auditLog = data.auditLog || [];
@@ -2369,10 +2396,56 @@
                         if (!c.issuedDate) c.issuedDate = '';
                         if (!c.bookId) c.bookId = null;
                     });
-                } catch (e) { resetData(); }
-            } else {
-                resetData();
+                    console.log("✅ Data loaded from Firestore");
+                } else {
+                    resetData();
+                    await saveData();
+                    console.log("✅ Seeded default data to Firestore");
+                }
+            } catch (error) {
+                console.error("❌ Error loading data:", error);
+                showToast("⚠️ Could not connect to Firebase. Using local cache if available.", "error");
             }
+            renderAll();
+            updateNavCounts();
+        }
+
+        async function saveData() {
+            try {
+                const docRef = db.collection('chequesData').doc(DATA_DOC_ID);
+                await docRef.set({
+                    cheques: cheques,
+                    nextId: nextId,
+                    auditLog: auditLog,
+                    comments: comments,
+                    lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+                });
+                console.log("✅ Data saved to Firestore");
+            } catch (error) {
+                console.error("❌ Error saving data:", error);
+                showToast("⚠️ Failed to save data to cloud. Check your connection.", "error");
+            }
+        }
+
+        function setupRealtimeListener() {
+            db.collection('chequesData').doc(DATA_DOC_ID)
+                .onSnapshot((doc) => {
+                    if (doc.exists) {
+                        const data = doc.data();
+                        const newCheques = data.cheques || [];
+                        if (JSON.stringify(newCheques) !== JSON.stringify(cheques)) {
+                            console.log("🔄 Cloud data changed – updating UI...");
+                            cheques = newCheques;
+                            nextId = data.nextId || 1;
+                            auditLog = data.auditLog || [];
+                            comments = data.comments || {};
+                            renderAll();
+                            showToast("🔄 Data synced from server!", "info");
+                        }
+                    }
+                }, (error) => {
+                    console.error("❌ Realtime listener error:", error);
+                });
         }
 
         function resetData() {
@@ -2519,24 +2592,6 @@
             localStorage.setItem('neonChequeBooks', JSON.stringify(chequeBooks));
             localStorage.setItem('neonSavedReports', JSON.stringify(savedReports));
             localStorage.setItem('neonWidgetConfig', JSON.stringify(widgetConfig));
-            saveData();
-        }
-
-        function saveData() {
-            localStorage.setItem('neonEnterpriseData', JSON.stringify({ cheques, nextId, auditLog, comments }));
-            localStorage.setItem('neonTags', JSON.stringify(tags));
-            localStorage.setItem('neonDocs', JSON.stringify(documents));
-            localStorage.setItem('neonCompanies', JSON.stringify(companies));
-            localStorage.setItem('neonCurrentCompany', currentCompany);
-            localStorage.setItem('neonBanks', JSON.stringify(banks));
-            localStorage.setItem('neonRules', JSON.stringify(rules));
-            localStorage.setItem('neonSettings', JSON.stringify(settings));
-            localStorage.setItem('neonNotifications', JSON.stringify(notifications));
-            localStorage.setItem('neonChequeBooks', JSON.stringify(chequeBooks));
-            localStorage.setItem('neonSavedReports', JSON.stringify(savedReports));
-            localStorage.setItem('neonWidgetConfig', JSON.stringify(widgetConfig));
-            localStorage.setItem('neonEmailConfig', JSON.stringify(emailConfig));
-            updateNavCounts();
         }
 
         function getActiveCheques() {
@@ -2577,7 +2632,7 @@
         }
 
         // ================================================================
-        //  RENDER HELPERS
+        //  RENDER ALL – primary render dispatcher
         // ================================================================
         function renderAll() {
             renderAllCheques();
@@ -2872,7 +2927,7 @@
         }
 
         // ================================================================
-        //  DASHBOARD CHARTS
+        //  CHARTS
         // ================================================================
         let chartInstances = {};
 
@@ -2946,7 +3001,7 @@
         }
 
         // ================================================================
-        //  AGING REPORT
+        //  AGING
         // ================================================================
         function renderAging() {
             const active = getActiveCheques();
@@ -3122,7 +3177,7 @@
         }
 
         // ================================================================
-        //  CUSTOM REPORT BUILDER
+        //  REPORTS
         // ================================================================
         function renderSavedReports() {
             const sel = document.getElementById('savedReports');
@@ -3534,7 +3589,7 @@
         }
 
         // ================================================================
-        //  ALL CHEQUES RENDER
+        //  ALL CHEQUES
         // ================================================================
         function renderAllCheques() {
             const search = document.getElementById('filterSearchAll')?.value?.toLowerCase() || '';
@@ -3608,7 +3663,7 @@
         }
 
         // ================================================================
-        //  IN HAND RENDER
+        //  IN HAND
         // ================================================================
         function renderInHand() {
             const search = document.getElementById('filterSearchInHand')?.value?.toLowerCase() || '';
@@ -3654,7 +3709,7 @@
         }
 
         // ================================================================
-        //  RETURNED RENDER
+        //  RETURNED
         // ================================================================
         function renderReturned() {
             const search = document.getElementById('filterSearchReturned')?.value?.toLowerCase() || '';
@@ -4016,7 +4071,6 @@
             document.getElementById('editId').value = '';
             document.getElementById('returnGroup').style.display = 'none';
 
-            // Ensure book dropdown exists
             let bookGroup = document.getElementById('fBookGroup');
             if (!bookGroup) {
                 const form = document.getElementById('chequeForm');
@@ -5170,7 +5224,7 @@
         }
 
         // ================================================================
-        //  NAVIGATION (FIXED)
+        //  NAVIGATION
         // ================================================================
         function navigateTo(page) {
             const target = document.getElementById('page-' + page);
@@ -5208,9 +5262,18 @@
         // ================================================================
         //  INIT
         // ================================================================
-        document.addEventListener('DOMContentLoaded', () => {
-            loadData();
-            renderAll();
+        document.addEventListener('DOMContentLoaded', async function() {
+            loadThemeSettings();
+            initParticles();
+            setupNotifications();
+            await loadData();
+            setupRealtimeListener();
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.addEventListener('click', function() {
+                    const page = this.dataset.page;
+                    navigateTo(page);
+                });
+            });
             renderCompanies();
             renderBanks();
             renderTags();
@@ -5219,9 +5282,6 @@
             renderRollbackCheques();
             renderAccountMapping();
             loadSettings();
-            setupNotifications();
-            loadThemeSettings();
-            initParticles();
             loadEmailSettings();
             toggleEmailService();
             renderSavedReports();
@@ -5262,9 +5322,7 @@
             });
 
             console.log('%c ✦ NeonCheque · Aurora ✦ ', 'background:linear-gradient(135deg,#7c5cfc,#00d4ff);color:#fff;font-size:24px;padding:14px 28px;border-radius:16px;font-weight:800;');
-            console.log('%c 🚀 8 new features: Bulk Import, QR, Email, Charts, Aging, Cheque Books, Widgets, Reports',
-                'color:#b8ccff;font-size:14px;');
-            console.log('%c ✅ Tabs fixed!', 'color:#00ff88;font-size:14px;');
+            console.log('%c 🔥 Firebase Cloud Sync Enabled!', 'color:#00ff88;font-size:14px;');
         });
     </script>
 </body>
